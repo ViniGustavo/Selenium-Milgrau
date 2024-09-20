@@ -1,0 +1,127 @@
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from collections import Counter
+import csv
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+driver = webdriver.Chrome()
+
+def buscar_resultados(url, pesquisa, filtro=None):
+    logging.info(f"Acessando o site: {url}")
+    driver.get(url)
+    
+    try:
+        search_box = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.NAME, "q")))
+        search_box.send_keys(pesquisa)
+        search_box.send_keys(Keys.RETURN)
+        
+        # Esperar os resultados carregarem
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "search")))
+        
+        resultados = []
+        for page in range(3):
+            logging.info(f"Extraindo resultados da página {page + 1}")
+            items = driver.find_elements(By.CSS_SELECTOR, "div.g")
+            for item in items:
+                try:
+                    nome = item.find_element(By.CSS_SELECTOR, "h3").text
+                    link = item.find_element(By.CSS_SELECTOR, "a").get_attribute("href")
+                    preco_element = item.find_elements(By.CSS_SELECTOR, ".price")
+                    preco = preco_element[0].text if preco_element else "Preço não disponível"
+                    
+                    resultados.append({
+                        "nome": nome,
+                        "link": link,
+                        "preco": preco,
+                        "relevancia": page + 1  # Menor página = mais relevante
+                    })
+                except Exception as e:
+                    logging.warning(f"Erro ao extrair informações de um item: {e}")
+            
+            try:
+                next_button = driver.find_element(By.ID, "pnnext")
+                next_button.click()
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "search")))
+            except Exception as e:
+                logging.warning(f"Erro ao clicar no botão de próxima página: {e}")
+                break
+        
+        return resultados
+    except Exception as e:
+        logging.error(f"Erro durante a busca de resultados: {e}")
+        return []
+
+def ordenar_por_preco(resultados, ordem='crescente'):
+    # Filtrar resultados que têm preço
+    resultados_com_preco = [item for item in resultados if item['preco'] != "Preço não disponível"]
+    
+    for item in resultados_com_preco:
+        try:
+            preco_str = item['preco'].replace("R$", "").replace(".", "").replace(",", ".")
+            item['preco_float'] = float(preco_str)
+        except ValueError:
+            item['preco_float'] = float('inf') if ordem == 'crescente' else 0.0
+    
+    return sorted(resultados_com_preco, key=lambda x: x['preco_float'], reverse=(ordem == 'decrescente'))
+
+def salvar_resultados_csv(resultados, arquivo):
+    try:
+        logging.info(f"Salvando resultados no arquivo CSV: {arquivo}")
+        with open(arquivo, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Nome", "Preço", "Link", "Relevância"])
+            for item in resultados:
+                writer.writerow([item['nome'], item['preco'], item['link'], item['relevancia']])
+    except Exception as e:
+        logging.error(f"Erro ao salvar resultados no CSV: {e}")
+
+def ler_top_3_produtos(arquivo):
+    try:
+        logging.info(f"Lendo os três principais produtos de {arquivo}")
+        top_3 = []
+        with open(arquivo, newline='', encoding='utf-8') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader)  # Pular o cabeçalho
+            for i, row in enumerate(reader):
+                if i >= 3:  # Só pegar os três primeiros
+                    break
+                top_3.append(row)
+        return top_3
+    except Exception as e:
+        logging.error(f"Erro ao ler o arquivo {arquivo}: {e}")
+        return []
+
+def mostrar_top_3_produtos():
+    arquivos = ["menor_valor.csv", "maior_valor.csv", "mais_relevantes.csv"]
+    
+    for arquivo in arquivos:
+        top_3 = ler_top_3_produtos(arquivo)
+        print(f"\nTop 3 produtos de {arquivo}:")
+        for produto in top_3:
+            nome, preco, link, relevancia = produto
+            print(f"Nome: {nome}\nPreço: {preco}\nLink: {link}\nRelevância: {relevancia}\n")
+
+urls = {
+    "zoom": "https://www.zoom.com.br/",
+    "mercado_livre": "https://www.mercadolivre.com.br/",
+    "kabum": "https://www.kabum.com.br/"
+}
+
+resultados_iniciais = buscar_resultados(urls["zoom"], "exemplo de pesquisa")
+
+menor_valor = ordenar_por_preco(resultados_iniciais, ordem='crescente')
+maior_valor = ordenar_por_preco(resultados_iniciais, ordem='decrescente')
+
+salvar_resultados_csv(menor_valor, "menor_valor.csv")
+salvar_resultados_csv(maior_valor, "maior_valor.csv")
+salvar_resultados_csv(resultados_iniciais, "mais_relevantes.csv")
+
+mostrar_top_3_produtos()
+
+input("Pressione Enter para fechar o navegador...")
+driver.quit()
